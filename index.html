@@ -1,31 +1,270 @@
 <!DOCTYPE html>
-<!-- A placeholder from the Home Sales template. Replace this file with your site's first page. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Under construction</title>
-  <!-- An empty icon, so the browser doesn't log an error looking for favicon.ico -->
+  <title>Median sale price by college town</title>
   <link rel="icon" href="data:,">
   <style>
-    :root { color-scheme: light dark; }
+    :root {
+      color-scheme: light dark;
+      --text: #1d1d1f;
+      --muted: #5f6368;
+      --bg: #ffffff;
+      --rule-bg: #f1f5f9;
+      --rule-border: #94a3b8;
+      --line: #d0d7de;
+      --bar: #2563eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --text: #e6e6e6;
+        --muted: #a0a7b0;
+        --bg: #121417;
+        --rule-bg: #1c2230;
+        --rule-border: #4b5a72;
+        --line: #303740;
+        --bar: #60a5fa;
+      }
+    }
+    :root[data-theme="dark"] {
+      --text: #e6e6e6;
+      --muted: #a0a7b0;
+      --bg: #121417;
+      --rule-bg: #1c2230;
+      --rule-border: #4b5a72;
+      --line: #303740;
+      --bar: #60a5fa;
+    }
+    * { box-sizing: border-box; }
     body {
-      max-width: 40rem;
       margin: 0 auto;
-      padding: 3rem 1rem;
-      font-family: system-ui, sans-serif;
+      max-width: 52rem;
+      padding: 2rem 1rem 3rem;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
       line-height: 1.5;
     }
-    footer { margin-top: 3rem; font-size: 0.875rem; opacity: 0.75; }
+    h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 0.5rem; }
+    p { margin: 0.5rem 0; }
+    .lede { color: var(--muted); }
+    .rule {
+      margin: 1.25rem 0;
+      padding: 0.75rem 1rem;
+      background: var(--rule-bg);
+      border-left: 4px solid var(--rule-border);
+      border-radius: 0.25rem;
+    }
+    .table-wrap { overflow-x: auto; margin-top: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+    caption {
+      text-align: left;
+      font-weight: 600;
+      padding-bottom: 0.5rem;
+      color: var(--muted);
+    }
+    th, td {
+      padding: 0.5rem 0.6rem;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: middle;
+    }
+    th.num, td.num { text-align: right; }
+    thead th { font-size: 0.875rem; color: var(--muted); font-weight: 600; }
+    .bar-cell { width: 35%; min-width: 8rem; }
+    .bar {
+      display: block;
+      height: 0.75rem;
+      background: var(--bar);
+      border-radius: 0.2rem;
+    }
+    #status { color: var(--muted); }
+    footer { margin-top: 3rem; font-size: 0.875rem; color: var(--muted); }
   </style>
 </head>
 <body>
   <main>
-    <h1>This site is under construction</h1>
-    <p>It will show findings from the College-town home sales dataset.</p>
+    <h1>Median sale price by college town</h1>
+    <p class="lede">One row per city in the College-town home sales dataset, sorted by median sale price, highest first.</p>
+
+    <div class="rule" id="rule">
+      <p><strong>Rule:</strong> sales under $10,000 are left out, because those prices are not plausible for a home sale. Every other sale is counted, including very high prices.</p>
+      <p id="counts"></p>
+    </div>
+
+    <p id="status" role="status">Loading the data file…</p>
+
+    <div class="table-wrap" hidden id="table-wrap">
+      <table id="city-table">
+        <caption>Median sale price by city, sales of $10,000 or more</caption>
+        <thead>
+          <tr>
+            <th scope="col">City</th>
+            <th scope="col" class="num">Sales counted</th>
+            <th scope="col" class="num">Median sale price</th>
+            <th scope="col" class="bar-cell">Relative to the highest median</th>
+          </tr>
+        </thead>
+        <tbody id="city-rows"></tbody>
+      </table>
+    </div>
+
+    <p class="lede">Medians are computed in your browser from <a href="data/college_town_home_sales.csv">the CSV file</a> each time the page loads. The median is the middle sale price when a city's sales are sorted from lowest to highest; with an even number of sales, it is the average of the two middle prices. The <a href="docs/data_description_sheet.md">data description sheet</a> gives medians that leave out sales under $1,000, so its figures will differ slightly.</p>
   </main>
+
   <footer>
     <p>Data: College-town home sales dataset, version 1.0 (2026). University of Illinois-Deloitte Foundation Center for Business Emerging Technologies. Data collected March 2026.</p>
   </footer>
+
+  <script>
+    (function () {
+      "use strict";
+
+      var CSV_URL = "data/college_town_home_sales.csv";
+      var MIN_PRICE = 10000;
+
+      var money = new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD",
+        maximumFractionDigits: 0
+      });
+      var integer = new Intl.NumberFormat("en-US");
+
+      // Minimal CSV reader that handles quoted fields, commas inside quotes and "" escapes.
+      function parseCSV(text) {
+        var rows = [];
+        var row = [];
+        var field = "";
+        var inQuotes = false;
+        for (var i = 0; i < text.length; i++) {
+          var c = text.charAt(i);
+          if (inQuotes) {
+            if (c === '"') {
+              if (text.charAt(i + 1) === '"') { field += '"'; i++; }
+              else { inQuotes = false; }
+            } else {
+              field += c;
+            }
+          } else if (c === '"') {
+            inQuotes = true;
+          } else if (c === ",") {
+            row.push(field);
+            field = "";
+          } else if (c === "\n" || c === "\r") {
+            if (c === "\r" && text.charAt(i + 1) === "\n") { i++; }
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = "";
+          } else {
+            field += c;
+          }
+        }
+        if (field !== "" || row.length > 0) {
+          row.push(field);
+          rows.push(row);
+        }
+        return rows;
+      }
+
+      function median(sorted) {
+        var n = sorted.length;
+        var mid = Math.floor(n / 2);
+        return n % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+      }
+
+      function cell(text, className) {
+        var td = document.createElement("td");
+        if (className) { td.className = className; }
+        td.textContent = text;
+        return td;
+      }
+
+      function render(text) {
+        var rows = parseCSV(text.replace(/^﻿/, ""));
+        var header = rows[0];
+        var iCity = header.indexOf("city");
+        var iState = header.indexOf("state");
+        var iPrice = header.indexOf("sale_price");
+        if (iCity < 0 || iState < 0 || iPrice < 0) {
+          throw new Error("The data file is missing the city, state or sale_price column.");
+        }
+
+        var total = 0;
+        var underMin = 0;
+        var unreadable = 0;
+        var groups = {};
+
+        for (var r = 1; r < rows.length; r++) {
+          var row = rows[r];
+          if (row.length < header.length) { continue; }
+          total++;
+
+          var raw = row[iPrice].trim();
+          if (!/^-?\d+$/.test(raw)) { unreadable++; continue; }
+          var price = parseInt(raw, 10);
+          if (price < MIN_PRICE) { underMin++; continue; }
+
+          var key = row[iCity] + ", " + row[iState];
+          if (!groups[key]) { groups[key] = { label: key, prices: [] }; }
+          groups[key].prices.push(price);
+        }
+
+        var cities = Object.keys(groups).map(function (key) {
+          var prices = groups[key].prices.sort(function (a, b) { return a - b; });
+          return {
+            label: groups[key].label,
+            sales: prices.length,
+            median: median(prices)
+          };
+        });
+        cities.sort(function (a, b) { return b.median - a.median; });
+
+        var counted = cities.reduce(function (sum, c) { return sum + c.sales; }, 0);
+        var countsText = "The file has " + integer.format(total) + " sales. " +
+          integer.format(underMin) + " of them are under $10,000 and were left out, so " +
+          integer.format(counted) + " sales are counted across " + cities.length + " cities.";
+        if (unreadable > 0) {
+          countsText += " " + integer.format(unreadable) + " rows had no readable sale price and were also left out.";
+        }
+        document.getElementById("counts").textContent = countsText;
+
+        var highest = cities.length ? cities[0].median : 0;
+        var body = document.getElementById("city-rows");
+        cities.forEach(function (c) {
+          var tr = document.createElement("tr");
+          tr.appendChild(cell(c.label));
+          tr.appendChild(cell(integer.format(c.sales), "num"));
+          tr.appendChild(cell(money.format(c.median), "num"));
+
+          var barTd = document.createElement("td");
+          barTd.className = "bar-cell";
+          var bar = document.createElement("span");
+          bar.className = "bar";
+          bar.style.width = (c.median / highest * 100).toFixed(1) + "%";
+          bar.setAttribute("aria-hidden", "true");
+          barTd.appendChild(bar);
+          tr.appendChild(barTd);
+
+          body.appendChild(tr);
+        });
+
+        document.getElementById("table-wrap").hidden = false;
+        document.getElementById("status").textContent = "";
+      }
+
+      fetch(CSV_URL)
+        .then(function (response) {
+          if (!response.ok) { throw new Error("HTTP " + response.status); }
+          return response.text();
+        })
+        .then(render)
+        .catch(function (error) {
+          document.getElementById("status").textContent =
+            "Could not load or read the data file (" + error.message + ").";
+        });
+    })();
+  </script>
 </body>
 </html>
